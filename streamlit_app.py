@@ -1,100 +1,149 @@
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import plotly.express as px
+from datetime import datetime
 
-# Configurazione Pagina
-st.set_page_config(page_title="Subito CRM Lorenzo", layout="wide", page_icon="🚀")
+# --- CONFIGURAZIONE PAGINA ---
+st.set_page_config(page_title="CRM Subito - Lorenzo", layout="wide", page_icon="📈")
 
-# --- NUOVI LINK PERSONALI (Funzionanti!) ---
-DB_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRGTkBfT37GtwGgqoex61g71GITGQze2JHQAb9WaM4-nXclQ21sYF9w2oXnOcgrIw2rhjDjrRb8UNmk/pub?gid=0&single=true&output=csv"
-TARGET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRGTkBfT37GtwGgqoex61g71GITGQze2JHQAb9WaM4-nXclQ21sYF9w2oXnOcgrIw2rhjDjrRb8UNmk/pub?gid=614814551&single=true&output=csv"
+# Stile CSS per un look professionale (Rosso Subito)
+st.markdown("""
+    <style>
+    .main { background-color: #f8f9fa; }
+    div[data-testid="stMetricValue"] { font-size: 1.8rem; color: #ff5a5f; }
+    .stDataFrame { border: 1px solid #e6e9ef; border-radius: 10px; }
+    [data-testid="stSidebar"] { background-color: #ffffff; border-right: 1px solid #eee; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- CONNESSIONE NATIVA ---
+conn = st.connection("gsheets", type=GSheetsConnection)
 
 @st.cache_data(ttl=60)
-def load_data(url):
+def load_crm_data():
+    # Legge il foglio principale
+    df = conn.read(worksheet="DB fatturato clienti Lorenzo")
+    df.columns = df.columns.str.strip()
+    
+    # Pulizia importi
+    def clean_val(x):
+        try:
+            return float(str(x).replace('€', '').replace('.', '').replace(',', '.').strip())
+        except:
+            return 0.0
+            
+    df['importo_n'] = df['importo'].apply(clean_val)
+    # Conversione date per alert
+    df['dt_scadenza'] = pd.to_datetime(df['data fine prodotto/servizio'], dayfirst=True, errors='coerce')
+    return df
+
+@st.cache_data(ttl=60)
+def load_target():
     try:
-        # Caricamento forzato in UTF-8 per evitare problemi con accenti
-        data = pd.read_csv(url, encoding='utf-8')
-        data.columns = data.columns.str.strip()
-        return data
-    except Exception as e:
+        t_df = conn.read(worksheet="Target_Semestrale")
+        t_df.columns = t_df.columns.str.strip()
+        return t_df
+    except:
         return pd.DataFrame()
 
-def clean_price(value):
-    if pd.isna(value) or value == "": return 0.0
-    # Trasforma '1.200,50 €' o '1200' in float pulito
-    s = str(value).replace('€', '').replace(' ', '').replace('\xa0', '')
-    if '.' in s and ',' in s:
-        s = s.replace('.', '').replace(',', '.')
-    elif ',' in s:
-        s = s.replace(',', '.')
-    try:
-        return float(s)
-    except:
-        return 0.0
-
 # Caricamento
-df = load_data(DB_URL)
-target_df = load_data(TARGET_URL)
+df = load_crm_data()
+target_df = load_target()
 
-if not df.empty:
-    # Pre-elaborazione dati
-    df['importo_n'] = df['importo'].apply(clean_price)
+# --- SIDEBAR NAVIGAZIONE ---
+st.sidebar.image("https://www.subito.it/assets/img/logo-subito.svg", width=120)
+st.sidebar.title("CRM Lorenzo V.")
+menu = st.sidebar.radio("Scegli la sezione:", ["📊 Dashboard Performance", "📋 Report Vendite", "👤 Scheda Cliente"])
+
+# --- TAB 1: DASHBOARD ---
+if menu == "📊 Dashboard Performance":
+    st.title("📊 Performance Commerciale")
     
-    st.title("🚀 Subito CRM - Dashboard Lorenzo")
-    st.markdown(f"**Ultimo aggiornamento:** {pd.Timestamp.now().strftime('%H:%M:%S')}")
-
-    # --- CALCOLO TARGET ---
-    totale_attuale = df['importo_n'].sum()
+    # Calcoli Target
+    totale_fatturato = df['importo_n'].sum()
     try:
-        # Cerca il target nel secondo foglio
-        val_target = target_df.iloc[0, 0] # Prende il primo valore della prima colonna
-        target_val = clean_price(val_target)
+        # Puliamo il valore del target
+        val_raw = target_df.iloc[0,0]
+        val_target = float(str(val_raw).replace('€', '').replace('.', '').replace(',', '.').strip())
     except:
-        target_val = 100000.0
+        val_target = 100000.0
     
-    perc = totale_attuale / target_val if target_val > 0 else 0
-
-    # --- KPI HEADER ---
+    perc_raggiungimento = totale_fatturato / val_target if val_target > 0 else 0
+    
+    # KPI Top
     c1, c2, c3 = st.columns(3)
-    c1.metric("Fatturato Totale", f"€ {totale_attuale:,.2f}")
-    c2.metric("Target Semestrale", f"€ {target_val:,.2f}")
-    c3.metric("Raggiungimento", f"{perc:.1%}")
+    c1.metric("Fatturato Reale YTD", f"€ {totale_fatturato:,.2f}")
+    c2.metric("Target Semestrale", f"€ {val_target:,.2f}")
+    c3.metric("Avanzamento Premio", f"{perc_raggiungimento:.1%}")
+    st.progress(min(perc_raggiungimento, 1.0))
     
-    st.progress(min(perc, 1.0))
-
-    # --- GRAFICI ---
     st.divider()
-    col_left, col_right = st.columns(2)
     
-    with col_left:
-        if 'tipologia prodotto' in df.columns:
-            fig_pie = px.pie(df, values='importo_n', names='tipologia prodotto', 
-                             title="Distribuzione Prodotti", hole=0.4,
-                             color_discrete_sequence=px.colors.qualitative.Pastel)
-            st.plotly_chart(fig_pie, use_container_width=True)
+    # Grafici
+    g1, g2 = st.columns(2)
+    with g1:
+        fig_pie = px.pie(df, values='importo_n', names='tipologia prodotto', hole=0.5, 
+                         title="Mix Prodotti (Volume d'Affari)",
+                         color_discrete_sequence=px.colors.qualitative.Pastel)
+        st.plotly_chart(fig_pie, use_container_width=True)
+    with g2:
+        df_m = df.groupby('mese inserimento')['importo_n'].sum().reset_index()
+        fig_bar = px.bar(df_m, x='mese inserimento', y='importo_n', title="Trend Fatturato Mensile",
+                         color_discrete_sequence=['#ff5a5f'], text_auto='.2s')
+        st.plotly_chart(fig_bar, use_container_width=True)
 
-    with col_right:
-        if 'mese inserimento' in df.columns:
-            # Raggruppamento per mese
-            df_m = df.groupby('mese inserimento')['importo_n'].sum().reset_index()
-            fig_bar = px.bar(df_m, x='mese inserimento', y='importo_n', 
-                             title="Andamento Mensile", text_auto='.2s',
-                             color_discrete_sequence=['#ff5a5f']) # Rosso Subito
-            st.plotly_chart(fig_bar, use_container_width=True)
+# --- TAB 2: REPORT VENDITE ---
+elif menu == "📋 Report Vendite":
+    st.title("📋 Report Completo Vendite")
+    
+    # Filtri veloci
+    col_f1, col_f2 = st.columns(2)
+    search_query = col_f1.text_input("🔍 Cerca Ragione Sociale...")
+    prod_filter = col_f2.multiselect("Filtra per Prodotto", df['tipologia prodotto'].unique())
+    
+    df_filtered = df.copy()
+    if search_query:
+        df_filtered = df_filtered[df_filtered['Ragione Sociale'].str.contains(search_query, case=False, na=False)]
+    if prod_filter:
+        df_filtered = df_filtered[df_filtered['tipologia prodotto'].isin(prod_filter)]
+    
+    st.write(f"Visualizzando {len(df_filtered)} record su {len(df)}")
+    
+    # Tabella Modificabile
+    st.data_editor(df_filtered[['Ragione Sociale', 'Categoria', 'tipologia prodotto', 'importo', 'mese inserimento', 'data fine prodotto/servizio']], 
+                   use_container_width=True, hide_index=True)
 
-    # --- TABELLA E SCADENZE ---
-    st.divider()
-    st.subheader("📋 Registro Vendite")
-    st.dataframe(df[['Ragione Sociale', 'tipologia prodotto', 'importo', 'data fine prodotto/servizio']].tail(10), use_container_width=True)
-
-    # Sidebar per scadenze
-    st.sidebar.header("⏳ Scadenze Imminenti")
-    if 'data fine prodotto/servizio' in df.columns:
-        df['dt_scadenza'] = pd.to_datetime(df['data fine prodotto/servizio'], dayfirst=True, errors='coerce')
-        prossime = df[df['dt_scadenza'] >= pd.Timestamp.now()].sort_values('dt_scadenza').head(5)
-        for _, row in prossime.iterrows():
-            st.sidebar.warning(f"**{row['Ragione Sociale']}**\nScade il: {row['data fine prodotto/servizio']}")
-
-else:
-    st.error("⚠️ Nessun dato trovato. Verifica che i fogli nel tuo Drive personale siano popolati.")
-    st.info("Nota: Assicurati che le colonne si chiamino esattamente come nel file originale.")
+# --- TAB 3: SCHEDA CLIENTE ---
+elif menu == "👤 Scheda Cliente":
+    st.title("👤 Profilo Cliente Dettagliato")
+    
+    clienti_unici = sorted(df['Ragione Sociale'].dropna().unique().tolist())
+    cliente_sel = st.selectbox("Seleziona il cliente per l'analisi:", [""] + clienti_unici)
+    
+    if cliente_sel:
+        dati_c = df[df['Ragione Sociale'] == cliente_sel]
+        
+        # Header Scheda
+        st.subheader(f"Dati per: {cliente_sel}")
+        
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1:
+            st.info(f"**Categoria**\n\n{dati_c['Categoria'].iloc[0]}")
+        with sc2:
+            st.success(f"**Totale Speso**\n\n€ {dati_c['importo_n'].sum():,.2f}")
+        with sc3:
+            attivi = len(dati_c[dati_c['dt_scadenza'] >= pd.Timestamp.now()])
+            st.warning(f"**Contratti Attivi**\n\n{attivi}")
+        
+        st.divider()
+        
+        # Elenco Prodotti
+        st.markdown("### 📦 Storico Prodotti Acquistati")
+        st.dataframe(dati_c[['tipologia prodotto', 'importo', 'mese inserimento', 'data fine prodotto/servizio']], 
+                     use_container_width=True, hide_index=True)
+        
+        # Grafico Trend Cliente
+        fig_c = px.line(dati_c.sort_values('dt_scadenza'), x='mese inserimento', y='importo_n', 
+                        title="Andamento Investimento Cliente", markers=True)
+        st.plotly_chart(fig_c, use_container_width=True)
