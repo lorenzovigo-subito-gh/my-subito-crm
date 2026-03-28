@@ -16,8 +16,8 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- 2. CONNESSIONE NATIVA ---
-# Questa riga cerca automaticamente l'URL nei "Secrets" che hai salvato prima
-conn = st.connection("gsheets", type=GSheetsConnection)
+# Sostituisci la riga 'conn = st.connection(...)' con questa:
+conn = st.connection("gsheets", type=GSheetsConnection, spreadsheet="https://docs.google.com/spreadsheets/d/1G9wp0SYGgWdrPf9_bkH63So-wwotju32n2HWGL4WHB8/edit")
 
 @st.cache_data(ttl=60)
 def load_crm_data():
